@@ -1,5 +1,7 @@
 # backup-automation
 
+[![ci](https://github.com/Alex-2rios/backup-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/Alex-2rios/backup-automation/actions/workflows/ci.yml)
+
 A bash backup job that implements the 3-2-1 rule properly: three copies, two media, one offsite,
 with rotation, checksums and a restore drill. Plus systemd timers so it runs itself and a test
 suite so I know it works.
@@ -16,7 +18,7 @@ checking, which had been failing silently for weeks.
 5. Copies to the second medium and **verifies again there**, on the far side of the copy.
 6. Pushes offsite with rsync or rclone.
 7. Prunes each rotation tier independently.
-8. Writes a state file with the result, for monitoring to pick up.
+8. Writes a state file and a Prometheus metrics file with the result.
 
 Every step that fails changes the exit code, and the script keeps going with the rest rather than
 dying halfway through:
@@ -71,13 +73,39 @@ in [docs/3-2-1.md](docs/3-2-1.md).
 `restore.sh` checks the checksum before extracting and refuses to write into a directory that
 already has files in it.
 
+## Telling monitoring about it
+
+Set `METRICS_DIR` to the node exporter textfile collector directory and every run drops a `.prom`
+file there:
+
+```
+backup_last_run_timestamp_seconds{backup_job="homelab"} 1787135402
+backup_last_success_timestamp_seconds{backup_job="homelab"} 1787135402
+backup_last_run_exit_code{backup_job="homelab"} 0
+backup_last_run_duration_seconds{backup_job="homelab"} 47
+backup_archives_written{backup_job="homelab",tier="daily"} 3
+backup_last_run_bytes{backup_job="homelab"} 918273645
+```
+
+The file is written to a temporary name and moved into place, because the collector will happily
+read a half written file otherwise and report nonsense for one scrape.
+
+`backup_last_success_timestamp_seconds` is carried over when a run fails, rather than
+disappearing. That matters: if the metric vanished on failure, `time() - last_success` would have
+nothing to subtract from and the "backup is too old" alert could never fire, which is precisely
+the moment you need it.
+
+My [homelab-monitoring](https://github.com/Alex-2rios/homelab-monitoring) repo has the alert
+rules that read these: backup failed, backup older than 26 hours, metrics missing entirely, a run
+that succeeded without writing anything, and a backup that suddenly came out half its usual size.
+
 ## Tests
 
 ```bash
 ./tests/test_backup.sh
 ```
 
-22 assertions against real temporary directories. No mocks, it makes actual archives and restores
+29 assertions against real temporary directories. No mocks, it makes actual archives and restores
 them. What it covers:
 
 - files land in both copies, with checksums
@@ -87,9 +115,10 @@ them. What it covers:
 - rotation trims to the configured count and keeps the newest
 - a second run refuses to start while the lock is held
 - a missing source and an unmounted second medium both exit non zero
+- the metrics file has the right names, and the last success timestamp survives a failed run
 
-That last pair is the point of the suite. It is easy to write a backup script that works when
-everything is fine.
+That pair about failures is the point of the suite. It is easy to write a backup script that
+works when everything is fine.
 
 ## What I learned
 
@@ -108,6 +137,15 @@ everything is fine.
   green light saying otherwise.
 - `set -euo pipefail` and `|| true` in the right places. The job should not abort because one
   source of five is unreadable, but it must not report success either.
+- A metrics file that disappears on failure is worse than useless. The alert that matters is
+  "nothing has succeeded in over a day", and it needs the old timestamp to still be there to
+  compare against.
+- Writing the metrics file atomically, to a temp name and then `mv`, is not paranoia. The
+  collector scrapes on its own schedule and will read whatever is on disk at that instant.
+- Do not name a label `job` in a textfile metric. Prometheus already puts a `job` label on
+  everything it scrapes, so mine got renamed to `exported_job` and every alert annotation said
+  "node" instead of the backup job. Renaming it to `backup_job` fixed it, and I only found it by
+  querying the metric after it had been ingested rather than trusting the file on disk.
 
 ## Next
 
