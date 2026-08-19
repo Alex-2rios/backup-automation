@@ -30,6 +30,14 @@ assert_false() {
     if [ "$2" -ne 0 ]; then ok "$1"; else bad "$1 (expected a non zero exit)"; fi
 }
 
+assert_file() {
+    if [ -f "$2" ]; then ok "$1"; else bad "$1 (no file at $2)"; fi
+}
+
+assert_greater() {
+    if [ "$2" -gt "$3" ]; then ok "$1"; else bad "$1 ($2 is not greater than $3)"; fi
+}
+
 count_archives() {
     find "$1" -maxdepth 1 -name 'testjob-*' ! -name '*.sha256' 2>/dev/null | wc -l | tr -d ' '
 }
@@ -42,6 +50,8 @@ setup() {
     head -c 20000 /dev/urandom > "$WORK/source/docs/blob.bin"
     printf 'disposable\n' > "$WORK/source/cache/session.tmp"
 
+    mkdir -p "$WORK/metrics"
+
     cat > "$WORK/backup.conf" <<CONF
 JOB_NAME="testjob"
 SOURCES="$WORK/source"
@@ -49,6 +59,7 @@ EXCLUDES="*.tmp"
 PRIMARY_DIR="$WORK/primary"
 SECONDARY_DIR="$WORK/secondary"
 REMOTE_TARGET=""
+METRICS_DIR="$WORK/metrics"
 LOG_FILE="$WORK/backup.log"
 KEEP_DAILY=3
 KEEP_WEEKLY=2
@@ -69,7 +80,19 @@ assert_equal "one archive lands in the primary copy" "$(count_archives "$WORK/pr
 assert_equal "one archive lands in the secondary copy" "$(count_archives "$WORK/secondary")" "1"
 
 ARCHIVE="$(find "$WORK/primary" -name 'testjob-*' ! -name '*.sha256' | head -1)"
-[ -f "$ARCHIVE.sha256" ] && ok "a checksum file is written" || bad "a checksum file is written"
+assert_file "a checksum file is written" "$ARCHIVE.sha256"
+
+printf '\nprometheus metrics\n'
+METRICS="$WORK/metrics/backup_testjob.prom"
+assert_file "a metrics file is written" "$METRICS"
+grep -q '^backup_last_success_timestamp_seconds{backup_job="testjob"} [0-9]\{10\}' "$METRICS"
+assert_true "it records when the job last succeeded" $?
+grep -q '^backup_last_run_exit_code{backup_job="testjob"} 0' "$METRICS"
+assert_true "the exit code metric is zero after a clean run" $?
+grep -q '^# HELP backup_last_run_bytes' "$METRICS"
+assert_true "every metric carries a HELP line" $?
+grep -q '^backup_archives_written{backup_job="testjob",tier="[a-z]*"} 1' "$METRICS"
+assert_true "the archive count is labelled with the rotation tier" $?
 
 printf '\narchive contents\n'
 tar -tf "$ARCHIVE" | grep -q 'docs/report.txt'
@@ -93,7 +116,7 @@ cp "$WORK/pristine.tar.gz" "$ARCHIVE"
 printf '\nrestore\n'
 "$ROOT/bin/restore.sh" --to "$WORK/restored" > "$WORK/restore.log" 2>&1
 assert_true "restore.sh extracts the newest archive" $?
-[ -f "$WORK/restored/source/docs/report.txt" ] && ok "the restored file exists" || bad "the restored file exists"
+assert_file "the restored file exists" "$WORK/restored/source/docs/report.txt"
 
 if [ -f "$WORK/restored/source/docs/report.txt" ]; then
     original="$(sha256sum < "$WORK/source/docs/report.txt")"
@@ -119,7 +142,7 @@ before="$(count_archives "$WORK/primary")"
 "$ROOT/bin/backup.sh" > "$WORK/run2.log" 2>&1
 after="$(find "$WORK/primary" -maxdepth 1 -name 'testjob-*-daily.tar.gz' | wc -l | tr -d ' ')"
 assert_equal "daily archives are trimmed to KEEP_DAILY" "$after" "3"
-[ "$before" -gt "$after" ] && ok "old archives were actually removed" || bad "old archives were actually removed"
+assert_greater "old archives were actually removed" "$before" "$after"
 
 oldest_left="$(find "$WORK/primary" -name 'testjob-*-daily.tar.gz' | sort | head -1)"
 case "$oldest_left" in
@@ -141,12 +164,19 @@ grep -q 'does not exist' "$WORK/run4.log"
 assert_true "the log says which source was missing" $?
 
 printf '\nunmounted secondary\n'
+SUCCESS_BEFORE="$(awk '/^backup_last_success_timestamp_seconds/ {print $NF}' "$METRICS")"
 sed -i "s#^SOURCES=.*#SOURCES=\"$WORK/source\"#" "$WORK/backup.conf"
 sed -i "s#^SECONDARY_DIR=.*#SECONDARY_DIR=\"$WORK/not-mounted\"#" "$WORK/backup.conf"
 "$ROOT/bin/backup.sh" > "$WORK/run5.log" 2>&1
 assert_false "an unmounted second copy is not silently ignored" $?
 grep -q 'not mounted' "$WORK/run5.log"
 assert_true "the log explains why" $?
+
+printf '\nmetrics after a failed run\n'
+grep -q '^backup_last_run_exit_code{backup_job="testjob"} 5' "$METRICS"
+assert_true "the failure shows up in the exit code metric" $?
+SUCCESS_AFTER="$(awk '/^backup_last_success_timestamp_seconds/ {print $NF}' "$METRICS")"
+assert_equal "the last successful run is not forgotten by a failure" "$SUCCESS_AFTER" "$SUCCESS_BEFORE"
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

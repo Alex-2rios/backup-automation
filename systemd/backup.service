@@ -15,7 +15,7 @@ TimeoutStartSec=4h
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/srv/backups /mnt/usb-backup /var/log
+ReadWritePaths=/srv/backups /mnt/usb-backup /var/log /var/lib/node_exporter/textfile_collector
 NoNewPrivileges=true
 
 [Install]

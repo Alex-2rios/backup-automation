@@ -20,6 +20,7 @@ load_config() {
 
     SECONDARY_DIR="${SECONDARY_DIR:-}"
     REMOTE_TARGET="${REMOTE_TARGET:-}"
+    METRICS_DIR="${METRICS_DIR:-}"
     LOG_FILE="${LOG_FILE:-${PRIMARY_DIR}/backup.log}"
     KEEP_DAILY="${KEEP_DAILY:-7}"
     KEEP_WEEKLY="${KEEP_WEEKLY:-4}"
@@ -222,10 +223,65 @@ write_state() {
         printf 'tier=%s\n' "$tier"
         printf 'archives=%s\n' "$archives"
         printf 'exit_code=%s\n' "$EXIT_CODE"
+        printf 'duration_seconds=%s\n' "$4"
+        printf 'bytes=%s\n' "$5"
         printf 'primary=%s\n' "$PRIMARY_DIR"
         printf 'secondary=%s\n' "${SECONDARY_DIR:-none}"
         printf 'offsite=%s\n' "${REMOTE_TARGET:-none}"
     } > "$state"
+}
+
+write_metrics() {
+    local tier="$1" archives="$2" duration="$3" bytes="$4"
+    local now target temp
+
+    [ -n "$METRICS_DIR" ] || return 0
+
+    if [ ! -d "$METRICS_DIR" ]; then
+        log error "METRICS_DIR $METRICS_DIR does not exist, metrics not written"
+        return 0
+    fi
+
+    now="$(date +%s)"
+    target="${METRICS_DIR}/backup_${JOB_NAME}.prom"
+    temp="${target}.$$"
+
+    local last_success=""
+    if [ -f "$target" ]; then
+        last_success="$(awk '/^backup_last_success_timestamp_seconds/ {print $NF}' "$target")"
+    fi
+    [ "$EXIT_CODE" -eq 0 ] && last_success="$now"
+
+    {
+        printf '# HELP backup_last_run_timestamp_seconds When this job last ran.\n'
+        printf '# TYPE backup_last_run_timestamp_seconds gauge\n'
+        printf 'backup_last_run_timestamp_seconds{backup_job="%s"} %s\n' "$JOB_NAME" "$now"
+
+        printf '# HELP backup_last_run_exit_code Exit code of the last run, 0 means every copy succeeded.\n'
+        printf '# TYPE backup_last_run_exit_code gauge\n'
+        printf 'backup_last_run_exit_code{backup_job="%s"} %s\n' "$JOB_NAME" "$EXIT_CODE"
+
+        printf '# HELP backup_last_run_duration_seconds How long the last run took.\n'
+        printf '# TYPE backup_last_run_duration_seconds gauge\n'
+        printf 'backup_last_run_duration_seconds{backup_job="%s"} %s\n' "$JOB_NAME" "$duration"
+
+        printf '# HELP backup_archives_written Archives produced by the last run.\n'
+        printf '# TYPE backup_archives_written gauge\n'
+        printf 'backup_archives_written{backup_job="%s",tier="%s"} %s\n' "$JOB_NAME" "$tier" "$archives"
+
+        printf '# HELP backup_last_run_bytes Total size of the archives produced by the last run.\n'
+        printf '# TYPE backup_last_run_bytes gauge\n'
+        printf 'backup_last_run_bytes{backup_job="%s"} %s\n' "$JOB_NAME" "$bytes"
+
+        if [ -n "$last_success" ]; then
+            printf '# HELP backup_last_success_timestamp_seconds When every copy last succeeded.\n'
+            printf '# TYPE backup_last_success_timestamp_seconds gauge\n'
+            printf 'backup_last_success_timestamp_seconds{backup_job="%s"} %s\n' "$JOB_NAME" "$last_success"
+        fi
+    } > "$temp"
+
+    mv "$temp" "$target"
+    log info "metrics written to $target"
 }
 
 main() {
@@ -237,9 +293,10 @@ main() {
     acquire_lock
     build_exclude_args
 
-    local stamp tier archive_count=0 source archive
+    local stamp tier archive_count=0 total_bytes=0 started duration source archive
     stamp="$(date '+%Y%m%d-%H%M%S')"
     tier="$(current_tier)"
+    started="$(date +%s)"
 
     log info "starting $JOB_NAME, tier $tier"
 
@@ -257,15 +314,18 @@ main() {
         copy_to_secondary "$archive" || true
         push_offsite "$archive" || true
         archive_count=$((archive_count + 1))
+        total_bytes=$((total_bytes + $(wc -c < "$archive")))
     done
 
     prune_all
-    write_state "$stamp" "$tier" "$archive_count"
+    duration=$(( $(date +%s) - started ))
+    write_state "$stamp" "$tier" "$archive_count" "$duration" "$total_bytes"
+    write_metrics "$tier" "$archive_count" "$duration" "$total_bytes"
 
     if [ "$EXIT_CODE" -eq 0 ]; then
-        log info "finished, $archive_count archives written to all configured copies"
+        log info "finished in ${duration}s, $archive_count archives written to all configured copies"
     else
-        log error "finished with problems, exit code $EXIT_CODE"
+        log error "finished with problems after ${duration}s, exit code $EXIT_CODE"
     fi
 
     exit "$EXIT_CODE"
