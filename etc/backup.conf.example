@@ -1,0 +1,19 @@
+JOB_NAME="homelab"
+
+SOURCES="/etc /home/arc/projects /var/lib/docker/volumes"
+
+EXCLUDES="*.tmp *.log node_modules .cache __pycache__ .venv"
+
+PRIMARY_DIR="/srv/backups"
+
+SECONDARY_DIR="/mnt/usb-backup"
+
+REMOTE_TARGET="backup@offsite.example.net:/srv/backups/homelab"
+
+LOG_FILE="/var/log/backup.log"
+
+KEEP_DAILY=7
+KEEP_WEEKLY=4
+KEEP_MONTHLY=6
+
+COMPRESSION="gzip"
