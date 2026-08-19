@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify backup archives and run a restore drill
+After=backup.service
+
+[Service]
+Type=oneshot
+Environment=BACKUP_CONFIG=/etc/backup/backup.conf
+ExecStart=/usr/local/bin/verify.sh --drill
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

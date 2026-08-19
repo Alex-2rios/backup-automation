@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the backup job every night
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=backup.service
+
+[Install]
+WantedBy=timers.target

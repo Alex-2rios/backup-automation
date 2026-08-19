@@ -1,0 +1,22 @@
+[Unit]
+Description=3-2-1 backup job
+Documentation=https://github.com/ARC/backup-automation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BACKUP_CONFIG=/etc/backup/backup.conf
+ExecStart=/usr/local/bin/backup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
+
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/backups /mnt/usb-backup /var/log
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
