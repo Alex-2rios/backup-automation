@@ -147,6 +147,23 @@ works when everything is fine.
   "node" instead of the backup job. Renaming it to `backup_job` fixed it, and I only found it by
   querying the metric after it had been ingested rather than trusting the file on disk.
 
+## Working on this
+
+```bash
+make help
+```
+
+The usual ones: `make test, make lint, make run, make drill, make install`.
+
+Every push runs the CI workflow described above. A second workflow, `security.yml`, runs weekly
+and on every push: it scans the history for committed secrets with gitleaks.
+
+Dependabot opens pull requests for the GitHub Actions and the dependencies once a week.
+
+Line endings are pinned to LF through `.gitattributes`, because half of this was written on
+Windows and shell scripts with carriage returns fail on Linux in a way that is genuinely
+confusing the first time.
+
 ## Next
 
 Append only or snapshotted storage on the offsite end, because ransomware that reaches the LAN
