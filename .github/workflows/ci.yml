@@ -33,5 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install the scripts where the units expect them
+        run: sudo install -m 755 bin/backup.sh bin/verify.sh bin/restore.sh /usr/local/bin/
+
       - name: Validate the unit files
         run: systemd-analyze verify systemd/backup.service systemd/backup-verify.service
