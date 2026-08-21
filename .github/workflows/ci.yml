@@ -12,6 +12,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Every tracked script has to be executable
+        run: |
+          missing=$(git ls-files --stage -- '*.sh' | awk '$1 != "100755" {print $4}')
+          if [ -n "$missing" ]; then
+            echo "these scripts are not executable in the index:" >&2
+            echo "$missing" >&2
+            echo "fix with: git update-index --chmod=+x <file>" >&2
+            exit 1
+          fi
+          echo "all scripts are executable"
+
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
